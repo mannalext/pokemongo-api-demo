@@ -1,3 +1,4 @@
+#! python2
 import requests
 import re
 import struct
@@ -236,49 +237,61 @@ def main():
     parser.add_argument("-p", "--password", help="PTC Password", required=True)
     parser.add_argument("-l", "--location", help="Location", required=True)
     parser.add_argument("-d", "--debug", help="Debug Mode", action='store_true')
+    parser.add_argument("-r", "--repetitions", help="Number of repetitions", required=True)
     parser.set_defaults(DEBUG=False)
     args = parser.parse_args()
-
-    if args.debug:
-        global DEBUG
-        DEBUG = True
-        print('[!] DEBUG mode on')
-
-    set_location(args.location)
-
-    access_token = login_ptc(args.username, args.password)
+    
+    user = args.username
+    pas = args.password
+    loc = args.location
+    deb = args.debug
+    rep = args.repetitions
+    
+    access_token = login_ptc(user, pas)
     if access_token is None:
         print('[-] Wrong username/password')
         return
     print('[+] RPC Session Token: {} ...'.format(access_token[:25]))
+    
+    near = dict()
+    midrange = dict()
+    far = dict()
 
-    api_endpoint = get_api_endpoint(access_token)
-    if api_endpoint is None:
-        print('[-] RPC server offline')
-        return
-    print('[+] Received API endpoint: {}'.format(api_endpoint))
+    for x in range(0, rep):
+        if deb:
+            global DEBUG
+            DEBUG = True
+            print('[!] DEBUG mode on')
 
-    response = get_profile(access_token, api_endpoint, None)
-    if response is not None:
-        print('[+] Login successful')
+        set_location(loc)
 
-        payload = response.payload[0]
-        profile = pokemon_pb2.ResponseEnvelop.ProfilePayload()
-        profile.ParseFromString(payload)
-        print('[+] Username: {}'.format(profile.profile.username))
+        api_endpoint = get_api_endpoint(access_token)
+        if api_endpoint is None:
+            print('[-] RPC server offline')
+            return
+        print('[+] Received API endpoint: {}'.format(api_endpoint))
 
-        creation_time = datetime.fromtimestamp(int(profile.profile.creation_time)/1000)
-        print('[+] You are playing Pokemon Go since: {}'.format(
-            creation_time.strftime('%Y-%m-%d %H:%M:%S'),
-        ))
+        response = get_profile(access_token, api_endpoint, None)
+        if response is not None:
+            print('[+] Login successful')
 
-        for curr in profile.profile.currency:
-            print('[+] {}: {}'.format(curr.type, curr.amount))
-    else:
-        print('[-] Ooops...')
+            payload = response.payload[0]
+            profile = pokemon_pb2.ResponseEnvelop.ProfilePayload()
+            profile.ParseFromString(payload)
+            print('[+] Username: {}'.format(profile.profile.username))
 
-    origin = LatLng.from_degrees(FLOAT_LAT, FLOAT_LONG)
-    while True:
+            creation_time = datetime.fromtimestamp(int(profile.profile.creation_time)/1000)
+            print('[+] You are playing Pokemon Go since: {}'.format(
+                creation_time.strftime('%Y-%m-%d %H:%M:%S'),
+            ))
+
+            for curr in profile.profile.currency:
+                print('[+] {}: {}'.format(curr.type, curr.amount))
+        else:
+            print('[-] Ooops...')
+
+        origin = LatLng.from_degrees(FLOAT_LAT, FLOAT_LONG)
+        
         original_lat = FLOAT_LAT
         original_long = FLOAT_LONG
         parent = CellId.from_lat_lng(LatLng.from_degrees(FLOAT_LAT, FLOAT_LONG)).parent(15)
@@ -314,6 +327,24 @@ def main():
                 print("Within one step of %s (%sm %s from you):" % (other, int(origin.get_distance(other).radians * 6366468.241830914), direction))
                 for poke in cell.NearbyPokemon:
                     print('    (%s) %s' % (poke.PokedexNumber, pokemons[poke.PokedexNumber - 1]['Name']))
+                    
+                    if (0 <= int(origin.get_distance(other).radians * 6366468.241830914) <= 50):
+                        if (pokemons[poke.PokedexNumber - 1]['Name'] in near):
+                            near[pokemons[poke.PokedexNumber - 1]['Name']] += 1
+                        else:      
+                            near[pokemons[poke.PokedexNumber - 1]['Name']] = 1
+                            
+                    elif (50 < int(origin.get_distance(other).radians * 6366468.241830914) <= 150):
+                        if (pokemons[poke.PokedexNumber - 1]['Name'] in midrange):
+                            midrange[pokemons[poke.PokedexNumber - 1]['Name']] += 1
+                        else:      
+                            midrange[pokemons[poke.PokedexNumber - 1]['Name']] = 1
+                            
+                    elif (150 < int(origin.get_distance(other).radians * 6366468.241830914)):
+                        if (pokemons[poke.PokedexNumber - 1]['Name'] in far):
+                            far[pokemons[poke.PokedexNumber - 1]['Name']] += 1
+                        else:      
+                            far[pokemons[poke.PokedexNumber - 1]['Name']] = 1
 
         print('')
         for poke in visible:
@@ -323,15 +354,37 @@ def main():
             difflat = diff.lat().degrees
             difflng = diff.lng().degrees
             direction = (('N' if difflat >= 0 else 'S') if abs(difflat) > 1e-4 else '')  + (('E' if difflng >= 0 else 'W') if abs(difflng) > 1e-4 else '')
-
             print("(%s) %s is visible at (%s, %s) for %s seconds (%sm %s from you)" % (poke.pokemon.PokemonId, pokemons[poke.pokemon.PokemonId - 1]['Name'], poke.Latitude, poke.Longitude, poke.TimeTillHiddenMs / 1000, int(origin.get_distance(other).radians * 6366468.241830914), direction))
-
-        print('')
-        walk = getNeighbors()
-        next = LatLng.from_point(Cell(CellId(walk[2])).get_center())
-        if raw_input('The next cell is located at %s. Keep scanning? [Y/n]' % next) in {'n', 'N'}:
-            break
-        set_location_coords(next.lat().degrees, next.lng().degrees, 0)
+            
+            if (0 <= int(origin.get_distance(other).radians * 6366468.241830914) <= 50):
+                if (pokemons[poke.pokemon.PokemonId - 1]['Name'] in near):
+                    near[pokemons[poke.pokemon.PokemonId - 1]['Name']] += 1
+                else:      
+                    near[pokemons[poke.pokemon.PokemonId - 1]['Name']] = 1
+                    
+            elif (50 < int(origin.get_distance(other).radians * 6366468.241830914) <= 150):
+                if (pokemons[poke.pokemon.PokemonId - 1]['Name'] in midrange):
+                    midrange[pokemons[poke.pokemon.PokemonId - 1]['Name']] += 1
+                else:      
+                    midrange[pokemons[poke.pokemon.PokemonId - 1]['Name']] = 1
+                    
+            elif (150 < int(origin.get_distance(other).radians * 6366468.241830914)):
+                if (pokemons[poke.pokemon.PokemonId - 1]['Name'] in far):
+                    far[pokemons[poke.pokemon.PokemonId - 1]['Name']] += 1
+                else:      
+                    far[pokemons[poke.pokemon.PokemonId - 1]['Name']] = 1
+    
+        print "\n"
+        print "sleeping for 15 minutes between runs to refresh spawn timers"
+        print "\n"
+        print "near %s" % near
+        print "\n"
+        print "midrange %s" % midrange
+        print "\n"
+        print "far %s" % far
+        print "\n"
+        time.sleep(900)
+        
 
 if __name__ == '__main__':
     main()
